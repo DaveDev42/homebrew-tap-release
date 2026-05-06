@@ -25,8 +25,7 @@ jobs:
           version: ${{ github.ref_name }}
           download-url: >-
             https://github.com/DaveDev42/macstate/releases/download/${{ github.ref_name }}/macstate-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz
-        env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          tap-token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 ```
 
 ## Inputs
@@ -36,14 +35,11 @@ jobs:
 | `formula-name` | yes | — | Formula name, e.g. `macstate`. |
 | `version` | yes | — | New version. Accepts `0.1.2` or `v0.1.2`. |
 | `download-url` | yes | — | Tarball URL; sha256 is computed by downloading it. |
+| `tap-token` | yes | — | Fine-grained PAT with `Contents: Write` on the tap repo. |
 | `formula-path` | no | `Formula/{formula-name}.rb` | Path inside the tap repo. |
 | `tap-repo` | no | `DaveDev42/homebrew-tap` | `owner/name` of the tap. |
 | `tap-branch` | no | `main` | Branch to commit to. |
 | `commit-message` | no | `{name} {version}` | Supports `{name}` and `{version}` placeholders. |
-
-## Required env
-
-- `TAP_TOKEN` — fine-grained PAT with `Contents: Write` on the tap repo.
 
 ## Formula contract
 

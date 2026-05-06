@@ -35,6 +35,11 @@ inputs:
     description: Commit message. Supports {name} and {version} placeholders.
     required: false
     default: "{name} {version}"
+  tap-token:
+    description: >-
+      Fine-grained PAT with Contents:Write on the tap repo. Pass via
+      `${{ secrets.HOMEBREW_TAP_TOKEN }}` from the caller workflow.
+    required: true
 
 runs:
   using: composite
@@ -49,6 +54,7 @@ runs:
         TAP_REPO: ${{ inputs.tap-repo }}
         TAP_BRANCH: ${{ inputs.tap-branch }}
         COMMIT_MSG_TEMPLATE: ${{ inputs.commit-message }}
+        TAP_TOKEN: ${{ inputs.tap-token }}
       run: |
         set -euo pipefail
 
