@@ -58,6 +58,16 @@ runs:
         formula_path="${FORMULA_PATH:-Formula/${FORMULA_NAME}.rb}"
         commit_message="${COMMIT_MSG_TEMPLATE//\{name\}/${FORMULA_NAME}}"
         commit_message="${commit_message//\{version\}/${version}}"
+        api="https://api.github.com"
+        contents_url="${api}/repos/${TAP_REPO}/contents/${formula_path}"
+
+        # Mask the token in any inadvertent log output and surface a token
+        # fingerprint to make 401s easier to diagnose without leaking secrets.
+        echo "::add-mask::${TAP_TOKEN}"
+        token_len="${#TAP_TOKEN}"
+        token_prefix="${TAP_TOKEN:0:4}"
+        token_tail_hash="$(printf '%s' "$TAP_TOKEN" | shasum -a 256 | cut -c1-8)"
+        echo "TAP_TOKEN: len=${token_len} prefix=${token_prefix}*** sha256-prefix=${token_tail_hash}"
 
         echo "::group::Compute sha256 of ${DOWNLOAD_URL}"
         tarball="$(mktemp)"
@@ -67,11 +77,25 @@ runs:
         echo "sha256=${sha256}"
         echo "::endgroup::"
 
-        echo "::group::Fetch ${TAP_REPO}:${formula_path}@${TAP_BRANCH}"
-        meta="$(GH_TOKEN="$TAP_TOKEN" gh api \
-          "repos/${TAP_REPO}/contents/${formula_path}?ref=${TAP_BRANCH}")"
-        blob_sha="$(jq -r .sha <<<"$meta")"
-        current="$(jq -r .content <<<"$meta" | base64 -d)"
+        echo "::group::GET ${contents_url}?ref=${TAP_BRANCH}"
+        meta_headers="$(mktemp)"
+        meta_body="$(mktemp)"
+        http_code="$(curl -sS -o "$meta_body" -D "$meta_headers" -w '%{http_code}' \
+          -H "Authorization: Bearer ${TAP_TOKEN}" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          -H "User-Agent: DaveDev42-homebrew-tap-release" \
+          "${contents_url}?ref=${TAP_BRANCH}")"
+        echo "HTTP ${http_code}"
+        # Surface response headers minus any auth-y bits.
+        grep -iE '^(x-ratelimit|x-github|x-accepted|content-type|status)' "$meta_headers" || true
+        if [ "$http_code" != "200" ]; then
+          echo "Response body:"
+          cat "$meta_body"
+          exit 1
+        fi
+        blob_sha="$(jq -r .sha "$meta_body")"
+        current="$(jq -r .content "$meta_body" | base64 -d)"
         echo "blob_sha=${blob_sha}"
         echo "::endgroup::"
 
@@ -91,13 +115,30 @@ runs:
           exit 0
         fi
 
-        echo "::group::Commit to ${TAP_REPO}@${TAP_BRANCH}"
+        echo "::group::PUT ${contents_url}"
         encoded="$(printf '%s' "$updated" | base64 | tr -d '\n')"
-        GH_TOKEN="$TAP_TOKEN" gh api -X PUT \
-          "repos/${TAP_REPO}/contents/${formula_path}" \
-          -f message="$commit_message" \
-          -f content="$encoded" \
-          -f sha="$blob_sha" \
-          -f branch="$TAP_BRANCH" >/dev/null
+        put_body="$(jq -n \
+          --arg msg "$commit_message" \
+          --arg content "$encoded" \
+          --arg sha "$blob_sha" \
+          --arg branch "$TAP_BRANCH" \
+          '{message:$msg, content:$content, sha:$sha, branch:$branch}')"
+        put_headers="$(mktemp)"
+        put_resp="$(mktemp)"
+        http_code="$(curl -sS -o "$put_resp" -D "$put_headers" -w '%{http_code}' \
+          -X PUT \
+          -H "Authorization: Bearer ${TAP_TOKEN}" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          -H "User-Agent: DaveDev42-homebrew-tap-release" \
+          -H "Content-Type: application/json" \
+          --data "$put_body" \
+          "$contents_url")"
+        echo "HTTP ${http_code}"
+        if [ "$http_code" != "200" ] && [ "$http_code" != "201" ]; then
+          echo "Response body:"
+          cat "$put_resp"
+          exit 1
+        fi
         echo "Pushed ${FORMULA_NAME} ${version} to ${TAP_REPO}."
         echo "::endgroup::"
