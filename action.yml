@@ -37,8 +37,8 @@ inputs:
     default: "{name} {version}"
   tap-token:
     description: >-
-      Fine-grained PAT with Contents:Write on the tap repo. Pass via
-      `${{ secrets.HOMEBREW_TAP_TOKEN }}` from the caller workflow.
+      Fine-grained PAT with Contents:Write on the tap repo. Pass a secret
+      from the caller workflow (e.g. secrets.HOMEBREW_TAP_TOKEN).
     required: true
 
 runs:
