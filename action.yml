@@ -1,0 +1,103 @@
+name: Bump Homebrew tap formula
+description: >-
+  Update version, url, and sha256 of a Homebrew formula in a tap repository
+  via the GitHub Contents API. Designed for fine-grained PATs scoped to the
+  tap repo only.
+author: DaveDev42
+
+branding:
+  icon: package
+  color: orange
+
+inputs:
+  formula-name:
+    description: Name of the formula (e.g. "macstate"). Used as default for formula-path.
+    required: true
+  version:
+    description: New version string. Accepts "0.1.2" or "v0.1.2".
+    required: true
+  download-url:
+    description: URL of the release tarball; sha256 is computed by downloading it.
+    required: true
+  formula-path:
+    description: Path of the formula file inside the tap repo.
+    required: false
+    default: ""
+  tap-repo:
+    description: GitHub repository "owner/name" of the Homebrew tap.
+    required: false
+    default: DaveDev42/homebrew-tap
+  tap-branch:
+    description: Branch in the tap repo to commit to.
+    required: false
+    default: main
+  commit-message:
+    description: Commit message. Supports {name} and {version} placeholders.
+    required: false
+    default: "{name} {version}"
+
+runs:
+  using: composite
+  steps:
+    - name: Bump formula
+      shell: bash
+      env:
+        FORMULA_NAME: ${{ inputs.formula-name }}
+        FORMULA_PATH: ${{ inputs.formula-path }}
+        VERSION_INPUT: ${{ inputs.version }}
+        DOWNLOAD_URL: ${{ inputs.download-url }}
+        TAP_REPO: ${{ inputs.tap-repo }}
+        TAP_BRANCH: ${{ inputs.tap-branch }}
+        COMMIT_MSG_TEMPLATE: ${{ inputs.commit-message }}
+      run: |
+        set -euo pipefail
+
+        : "${TAP_TOKEN:?TAP_TOKEN env var is required (fine-grained PAT with Contents:Write on the tap repo)}"
+
+        version="${VERSION_INPUT#v}"
+        formula_path="${FORMULA_PATH:-Formula/${FORMULA_NAME}.rb}"
+        commit_message="${COMMIT_MSG_TEMPLATE//\{name\}/${FORMULA_NAME}}"
+        commit_message="${commit_message//\{version\}/${version}}"
+
+        echo "::group::Compute sha256 of ${DOWNLOAD_URL}"
+        tarball="$(mktemp)"
+        curl -fsSL "$DOWNLOAD_URL" -o "$tarball"
+        sha256="$(shasum -a 256 "$tarball" | awk '{print $1}')"
+        rm -f "$tarball"
+        echo "sha256=${sha256}"
+        echo "::endgroup::"
+
+        echo "::group::Fetch ${TAP_REPO}:${formula_path}@${TAP_BRANCH}"
+        meta="$(GH_TOKEN="$TAP_TOKEN" gh api \
+          "repos/${TAP_REPO}/contents/${formula_path}?ref=${TAP_BRANCH}")"
+        blob_sha="$(jq -r .sha <<<"$meta")"
+        current="$(jq -r .content <<<"$meta" | base64 -d)"
+        echo "blob_sha=${blob_sha}"
+        echo "::endgroup::"
+
+        echo "::group::Rewrite version, url, sha256"
+        updated="$(printf '%s' "$current" | awk \
+          -v ver="$version" -v url="$DOWNLOAD_URL" -v sha="$sha256" '
+          {
+            if      ($0 ~ /^[[:space:]]*version[[:space:]]+"/)  { sub(/"[^"]*"/, "\"" ver "\"") }
+            else if ($0 ~ /^[[:space:]]*url[[:space:]]+"/)      { sub(/"[^"]*"/, "\"" url "\"") }
+            else if ($0 ~ /^[[:space:]]*sha256[[:space:]]+"/)   { sub(/"[^"]*"/, "\"" sha "\"") }
+            print
+          }')"
+        echo "::endgroup::"
+
+        if [ "$current" = "$updated" ]; then
+          echo "Formula already up to date; nothing to commit."
+          exit 0
+        fi
+
+        echo "::group::Commit to ${TAP_REPO}@${TAP_BRANCH}"
+        encoded="$(printf '%s' "$updated" | base64 | tr -d '\n')"
+        GH_TOKEN="$TAP_TOKEN" gh api -X PUT \
+          "repos/${TAP_REPO}/contents/${formula_path}" \
+          -f message="$commit_message" \
+          -f content="$encoded" \
+          -f sha="$blob_sha" \
+          -f branch="$TAP_BRANCH" >/dev/null
+        echo "Pushed ${FORMULA_NAME} ${version} to ${TAP_REPO}."
+        echo "::endgroup::"
